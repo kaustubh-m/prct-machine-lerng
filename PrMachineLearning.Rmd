@@ -1,0 +1,141 @@
+
+
+##Weight Lifting Exercise - automated detection of good / bad form
+
+###Abstract
+This is an R-based non-linear machine learning model, developed to detect whether a human subject is performing a weightlifting exercise using correct form.
+
+It uses the WLE (weight-lifting exercise) dataset from this source:
+
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
+### Data Cleaning 
+
+
+```{r}
+
+library(dplyr)
+library(randomForest)
+library(caret)
+# Reading raw data into a data frame, treating text 'NA' and missing values # as NA
+wleTrain <- read.table("pml-training.csv", sep = ",", na.strings = c("NA", ""), header = TRUE)
+
+# Converting predictor fields into numeric, leaving out unnecessary fields
+wleTrain1 <- mutate_each(wleTrain[, c(8:159)], c("as.numeric"))
+
+# retaining the outcome field (classe) as character 
+wleTrain1 <- cbind(wleTrain1, wleTrain[, 160])
+names(wleTrain1)[153] <- "classe"
+
+```
+
+
+Checking what fields have NA values, in order to identify which of the predictor fields are usable.
+```{r}
+wleNACount <- seq(0,0, length.out = 153)
+for (i in 1:152) {wleNACount[i] <- sum(is.na(wleTrain1[, i]))}
+
+unique(wleNACount)
+
+# Based on the analysis of NA values, retaining only fields having no NA
+wleTrain2 <- wleTrain1[wleNACount == 0]
+```
+We are left with a total of 53 fields, of which 52 are potential predictors.
+
+<br/>
+<br/>
+
+We find which of the 52 candidate predictors have zero or near-zero variance, so that we can eliminate them from the model training.
+```{r}
+nearZeroVar(wleTrain2, saveMetrics = TRUE)
+```
+None of the 52 predictors can be eliminated based on near-zero variance.
+
+<br/>
+<br/>
+
+
+We find which of the remaining 52 predictors show high correlation (> 0.8) with one another (which implies that predictors may be combined, using Principal Component Analysis).
+```{r}
+M <- abs(cor(wleTrain2[, -53]))
+diag(M) <- 0
+which(M > 0.8, arr.ind = T)
+```
+
+<br/>
+<br/>
+
+### Data Pre-processing
+We use Principal Component Analysis.
+```{r}
+wleTrain2PrComp <- preProcess(wleTrain2[, -53], method = "pca", thresh = 0.95)
+predict_wleTrain2PrComp <- predict(wleTrain2PrComp, wleTrain2[, -53])
+dim(predict_wleTrain2PrComp)
+```
+We find that a threshold of 0.95 of variance corresponds to 25 principal components.
+
+<br/>
+<br/>
+
+### Cross Validation
+
+In order to gauge the out-of-sample error of our predictive model, we first use n-fold cross validation on the training set
+
+```{r}
+set.seed(32323)
+folds <- createFolds(y = wleTrain2$classe, k = 10, list = TRUE, returnTrain = TRUE)
+```
+
+<br/>
+<br/>
+
+Before training a model, we make the settings for parallel processing, so that the performance of the the training operation improves.
+
+```{r}
+library(doParallel)
+
+cl <- makeCluster(detectCores())
+
+registerDoParallel(cl)
+```
+
+<br/>
+<br/>
+
+We train a preliminary model on fold 1 of the training set using the Random Forest non-linear method, and test it on the remaining data (- fold 1). We use PCA as the preprocessing type
+
+```{r}
+wleTrainFold1 <- wleTrain2[folds[[1]],]
+
+modelWLETrainFold1 <- train(wleTrainFold1$classe ~ ., method = "rf", preProcess = "pca", data = wleTrainFold1, trControl = trainControl(preProcOptions = list(thresh = 0.95)))
+
+confusionMatrix(wleTrain2[-folds[[1]],]$classe, predict(modelWLETrainFold1, wleTrain2[-folds[[1]],]))
+
+```
+
+<br/>
+<br/>
+
+We find that accuracy of the model trained on fold 1 is high (> 90%) & kappa > 0.9 when tested on the remaining (- fold 1) training data.
+
+<br/>
+<br/>
+
+### Fitting a Model
+
+We hence proceed with the training of a model on the entire training data, as follows:
+
+```{r}
+modelWLETrain2 <- train(wleTrain2$classe ~ ., method = "rf", preProcess = "pca", data = wleTrain2, trControl = trainControl(preProcOptions = list(thresh = 0.95)))
+```
+
+<br/>
+<br/>
+
+### Predicting on test data
+
+```{r}
+wleTest <- read.table("pml-testing.csv", sep = ",", na.strings = c("NA", ""), header = TRUE)
+predict(modelWLETrain2, wleTest)
+
+```
